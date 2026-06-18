@@ -3,7 +3,9 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using Microsoft.Win32;
 using Zametkis.Enums;
 
 namespace Zametkis;
@@ -27,20 +29,6 @@ public partial class WorkDirectory : Window
         workWindow = Window.GetWindow(this);
     }
 
-    /// <summary>
-    /// мы принимаем точку экрана при вызове функции
-    /// </summary>
-    /// <param name="point"></param>
-    /// <returns></returns>
-    private Point screenToWorld(Point point)
-    {
-        var pX=(point.X/CameraZoom)+CameraX;
-        var pY=(point.Y/CameraZoom)+CameraY;
-        Point res = new Point(pX, pY);
-        return res;
-    }
-     
-    
     private void AddPaint(object sender, RoutedEventArgs e)
     {
         if (_currentTool != ToolsZametki.Paint)
@@ -61,9 +49,19 @@ public partial class WorkDirectory : Window
         }
     }
 
+    private void AddPhoto(object sender, RoutedEventArgs e)
+    {
+        if (_currentTool != ToolsZametki.Photo)
+            _currentTool = ToolsZametki.Photo;
+        else
+        {
+            _currentTool = ToolsZametki.None;
+        }
+    }
+
     private void WorkWithTool(object sender, MouseButtonEventArgs e)
     {
-        var pos = screenToWorld(Mouse.GetPosition(Grid1));
+        var pos = Mouse.GetPosition(paintSurface);
         
         var posX = pos.X;
         var posY = pos.Y;
@@ -78,29 +76,47 @@ public partial class WorkDirectory : Window
                 tb.SetValue(Canvas.LeftProperty, posX);
                 paintSurface.Children.Add(tb);
                 break;
-            case ToolsZametki.Paint: 
-                
+            case ToolsZametki.Photo:
+                var dialog = new OpenFileDialog
+                {
+                    Filter = "Изображения|*.png;*.jpg;*.jpeg;*.gif;*.bmp"
+                };
+                if (dialog.ShowDialog() == true)
+                {
+                    Image image = new Image();
+                    image.Source = new BitmapImage(new Uri(dialog.FileName));
+                    image.Width = 200;
+                    image.Stretch = Stretch.Uniform;
+                    image.SetValue(Canvas.TopProperty, posY);
+                    image.SetValue(Canvas.LeftProperty, posX);
+                    paintSurface.Children.Add(image);
+                }
+                break;
+            case ToolsZametki.Paint:
+
             default:
                 break;
         }
     }
 
-    // реализовать функу чтобы увеличивалось место где курсор
     private void ZoomInAndOut(object sender, MouseWheelEventArgs e)
     {
-        // Determine the direction of the zoom (in or out)
+        // точка мира, которая сейчас под курсором - она должна остаться под курсором после зума
+        var worldMouse = Mouse.GetPosition(paintSurface);
+        double oldZoom = CameraZoom;
+
         bool zoomIn = e.Delta > 0;
-
-        // Set the scale value based on the direction of the zoom
         CameraZoom += zoomIn ? 0.1 : -0.1;
-
-        // Set the maximum and minimum scale values
         CameraZoom = CameraZoom < 0.1 ? 0.1 : CameraZoom;
         CameraZoom = CameraZoom > 10.0 ? 10.0 : CameraZoom;
 
-        // Apply the scale transformation to the ItemsControl
+        double ratio = oldZoom / CameraZoom;
+        CameraX = worldMouse.X - (worldMouse.X - CameraX) * ratio;
+        CameraY = worldMouse.Y - (worldMouse.Y - CameraY) * ratio;
+
         scaleTransform = new ScaleTransform(CameraZoom, CameraZoom);
         paintSurface.LayoutTransform = scaleTransform;
+        UpdateCamera();
     }
     
     
@@ -126,7 +142,7 @@ public partial class WorkDirectory : Window
         {
             case ToolsZametki.Paint:
                 if (e.ButtonState == MouseButtonState.Pressed)
-                    currentPoint = screenToWorld(Mouse.GetPosition(Grid1));
+                    currentPoint = Mouse.GetPosition(paintSurface);
                 break;
             case ToolsZametki.None:
                 if (e.ButtonState == MouseButtonState.Pressed)
@@ -154,7 +170,7 @@ public partial class WorkDirectory : Window
                     Line line = new Line();
 
                     line.Stroke = SystemColors.WindowFrameBrush;
-                    var worldMouse = screenToWorld(Mouse.GetPosition(Grid1));
+                    var worldMouse = Mouse.GetPosition(paintSurface);
 
                     line.X1 = currentPoint.X;
                     line.Y1 = currentPoint.Y;
