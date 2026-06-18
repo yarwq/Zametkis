@@ -1,0 +1,35 @@
+﻿<Window x:Class="Zametkis.WorkDirectory"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:local="clr-namespace:Zametkis"
+        mc:Ignorable="d"
+        Height="800" Width="800">
+    <Grid Name="Grid1">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Background="Aqua">
+        <Button Grid.Row="0" x:Name="Paint" Content="Add A Paint"
+                Click="AddPaint" ClickMode="Press"
+                Width="150"
+                Height="50"
+                Foreground="Blue"/>
+        <Button Grid.Row="0" x:Name="Text" Content="Add A Text" Padding="0,0,10,0"
+                Click="AddText" ClickMode="Press"
+                Width="150"
+                Height="50"
+                Foreground="Blue"/>
+        </StackPanel>
+        <Canvas Name="paintSurface" Grid.Row="1"
+                MouseMove="DrawME" MouseDown="PaintME"
+                MouseLeftButtonDown="WorkWithTool" MouseWheel="ZoomInAndOut"
+                MouseUp="StopMoving">
+            <Canvas.Background>
+                <SolidColorBrush Color="White" Opacity="0"/>
+            </Canvas.Background>
+        </Canvas>
+    </Grid>
+</Window>
