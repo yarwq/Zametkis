@@ -28,6 +28,9 @@
                     <Button x:Name="PhotoToolButton" Content="Фото"
                             Click="AddPhoto" ClickMode="Press"
                             Style="{StaticResource ToolButtonStyle}"/>
+                    <Button x:Name="PageToolButton" Content="Страница"
+                            Click="AddPage" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
                     <Border Width="1" Margin="4,4" Background="{StaticResource BorderBrush}"/>
                     <Button x:Name="SaveButton" Content="Сохранить"
                             Click="SaveZametki" ClickMode="Press"
@@ -41,6 +44,14 @@
                     <TextBlock Text="Цвет" VerticalAlignment="Center" Margin="0,0,8,0"
                                FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
                     <StackPanel x:Name="ColorSwatchesPanel" Orientation="Horizontal"/>
+                </StackPanel>
+                <StackPanel x:Name="BreadcrumbBar" Orientation="Horizontal"
+                            Margin="16,0,16,12" Visibility="Collapsed">
+                    <Button x:Name="BackButton" Content="← Назад"
+                            Click="GoBack" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
+                    <TextBlock x:Name="BreadcrumbText" VerticalAlignment="Center" Margin="8,0,0,0"
+                               FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
             </StackPanel>
         </Border>

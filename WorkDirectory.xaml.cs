@@ -34,6 +34,17 @@ public partial class WorkDirectory : Window
     private readonly List<UIElement> _undoStack = new();
     private readonly List<UIElement> _redoStack = new();
 
+    // запись о странице, которую покинули при навигации вглубь: данные родительской
+    // страницы (чтобы восстановить их при возврате) + индекс PageNote, через которую
+    // зашли (чтобы при сохранении подставить туда актуальное содержимое), + камера родителя
+    private class PageStackEntry
+    {
+        public List<NoteItemData> ParentItems = new();
+        public int SourceNoteIndex;
+        public double CameraX, CameraY, CameraZoom;
+    }
+    private readonly List<PageStackEntry> _pageStack = new(); // порядок: корень -> текущая
+
     private static readonly (string Label, double Thickness)[] ThicknessOptions =
     {
         ("Тонкая", 1.5),
@@ -75,6 +86,7 @@ public partial class WorkDirectory : Window
 
         workWindow = Window.GetWindow(this);
         UpdateCamera();
+        UpdateBreadcrumb();
 
         Closed += WorkDirectory_Closed;
         KeyDown += WorkDirectory_KeyDown;
@@ -181,11 +193,23 @@ public partial class WorkDirectory : Window
         UpdateToolButtonVisuals();
     }
 
+    private void AddPage(object sender, RoutedEventArgs e)
+    {
+        if (_currentTool != ToolsZametki.Page)
+            _currentTool = ToolsZametki.Page;
+        else
+        {
+            _currentTool = ToolsZametki.None;
+        }
+        UpdateToolButtonVisuals();
+    }
+
     private void UpdateToolButtonVisuals()
     {
         SetToolButtonActive(PaintToolButton, _currentTool == ToolsZametki.Paint);
         SetToolButtonActive(TextToolButton, _currentTool == ToolsZametki.Text);
         SetToolButtonActive(PhotoToolButton, _currentTool == ToolsZametki.Photo);
+        SetToolButtonActive(PageToolButton, _currentTool == ToolsZametki.Page);
         PaintOptionsPanel.Visibility = _currentTool == ToolsZametki.Paint ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -303,6 +327,13 @@ public partial class WorkDirectory : Window
                     RegisterAddedItem(photoNote);
                 }
                 break;
+            case ToolsZametki.Page:
+                _currentTool = ToolsZametki.None;
+                UpdateToolButtonVisuals();
+                var pageNote = CreatePageNote(posX, posY, "Новая страница");
+                paintSurface.Children.Add(pageNote);
+                RegisterAddedItem(pageNote);
+                break;
             case ToolsZametki.Paint:
 
             default:
@@ -324,6 +355,24 @@ public partial class WorkDirectory : Window
         Canvas.SetLeft(photoNote, x);
         Canvas.SetTop(photoNote, y);
         return photoNote;
+    }
+
+    // nestedItems/cameraX/Y/Zoom заданы при восстановлении страницы из сохранённых данных;
+    // для только что созданной пустой страницы используются значения по умолчанию
+    private PageNote CreatePageNote(double x, double y, string title, List<NoteItemData>? nestedItems = null,
+        double cameraX = 0, double cameraY = 0, double cameraZoom = 1.0)
+    {
+        var pageNote = new PageNote(title)
+        {
+            NestedItems = nestedItems ?? new(),
+            NestedCameraX = cameraX,
+            NestedCameraY = cameraY,
+            NestedCameraZoom = cameraZoom > 0 ? cameraZoom : 1.0
+        };
+        Canvas.SetLeft(pageNote, x);
+        Canvas.SetTop(pageNote, y);
+        pageNote.OpenRequested += (_, _) => OpenPage(pageNote);
+        return pageNote;
     }
 
     private static ShapePath CreateStrokePath(List<Point> points, Color color, double thickness)
@@ -499,6 +548,237 @@ public partial class WorkDirectory : Window
         _currentStrokeShape = null;
     }
 
+    // переходим внутрь вложенной страницы: текущее содержимое холста сохраняем как данные
+    // в стек (чтобы вернуться по "Назад"), а холст заполняем содержимым этой страницы.
+    // Содержимое страниц, которые сейчас не на экране, всегда хранится как чистые данные
+    // (NoteItemData), а не как живые элементы - поэтому при заходе/выходе текстовые заметки
+    // пересоздают WebView2 заново; для навигации между страницами (нечастое действие) это
+    // приемлемая цена за то, что не нужно держать произвольное число WebView2 в фоне
+    private async void OpenPage(PageNote note)
+    {
+        int index = paintSurface.Children.IndexOf(note);
+        var parentItems = await SerializeActivePageAsync(paintSurface.Children.Cast<UIElement>());
+        _pageStack.Add(new PageStackEntry
+        {
+            ParentItems = parentItems,
+            SourceNoteIndex = index,
+            CameraX = CameraX,
+            CameraY = CameraY,
+            CameraZoom = CameraZoom
+        });
+
+        await MaterializeIntoSurfaceAsync(note.NestedItems, baseDir: null);
+
+        CameraX = note.NestedCameraX;
+        CameraY = note.NestedCameraY;
+        CameraZoom = note.NestedCameraZoom > 0 ? note.NestedCameraZoom : 1.0;
+        scaleTransform.ScaleX = CameraZoom;
+        scaleTransform.ScaleY = CameraZoom;
+        UpdateCamera();
+
+        _currentTool = ToolsZametki.None;
+        UpdateToolButtonVisuals();
+        _undoStack.Clear();
+        _redoStack.Clear();
+        UpdateBreadcrumb();
+    }
+
+    private async void GoBack(object sender, RoutedEventArgs e)
+    {
+        if (_pageStack.Count == 0)
+            return;
+
+        var entry = _pageStack[^1];
+        _pageStack.RemoveAt(_pageStack.Count - 1);
+
+        // записываем актуальное содержимое покидаемой страницы туда, где её ждёт родитель -
+        // без этого восстановленный родитель показал бы устаревшую вложенную страницу
+        var leftItems = await SerializeActivePageAsync(paintSurface.Children.Cast<UIElement>());
+        var sourceItem = entry.ParentItems[entry.SourceNoteIndex];
+        sourceItem.Children = leftItems;
+        sourceItem.CameraX = CameraX;
+        sourceItem.CameraY = CameraY;
+        sourceItem.CameraZoom = CameraZoom;
+
+        await MaterializeIntoSurfaceAsync(entry.ParentItems, baseDir: null);
+
+        CameraX = entry.CameraX;
+        CameraY = entry.CameraY;
+        CameraZoom = entry.CameraZoom;
+        scaleTransform.ScaleX = CameraZoom;
+        scaleTransform.ScaleY = CameraZoom;
+        UpdateCamera();
+
+        _currentTool = ToolsZametki.None;
+        UpdateToolButtonVisuals();
+        _undoStack.Clear();
+        _redoStack.Clear();
+        UpdateBreadcrumb();
+    }
+
+    private void UpdateBreadcrumb()
+    {
+        BreadcrumbBar.Visibility = _pageStack.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        BreadcrumbText.Text = string.Join(" › ", _pageStack.Select(entry => entry.ParentItems[entry.SourceNoteIndex].Text));
+        Title = $"DBG depth={_pageStack.Count} children={paintSurface.Children.Count} crumb=[{BreadcrumbText.Text}]";
+    }
+
+    // лёгкая сериализация ТОЛЬКО активной (смонтированной на paintSurface) страницы, без файлового
+    // I/O - в отличие от сохранения на диск, путь к фото тут абсолютный (PhotoNote.SourcePath как есть)
+    private async Task<List<NoteItemData>> SerializeActivePageAsync(IEnumerable<UIElement> children)
+    {
+        var result = new List<NoteItemData>();
+        foreach (UIElement child in children)
+        {
+            switch (child)
+            {
+                case RichTextNote richTextNote:
+                    result.Add(new NoteItemData
+                    {
+                        Type = "Text",
+                        X = Canvas.GetLeft(richTextNote),
+                        Y = Canvas.GetTop(richTextNote),
+                        Text = await richTextNote.GetContentAsync()
+                    });
+                    break;
+                case PhotoNote photoNote:
+                    result.Add(new NoteItemData
+                    {
+                        Type = "Photo",
+                        X = Canvas.GetLeft(photoNote),
+                        Y = Canvas.GetTop(photoNote),
+                        FileName = photoNote.SourcePath,
+                        Text = photoNote.CaptionText,
+                        CaptionExpanded = photoNote.IsCaptionExpanded
+                    });
+                    break;
+                case ShapePath strokePath when strokePath.Tag is List<Point> strokePoints:
+                    result.Add(new NoteItemData
+                    {
+                        Type = "Stroke",
+                        Points = strokePoints,
+                        Color = (strokePath.Stroke as SolidColorBrush)?.Color.ToString(),
+                        Thickness = strokePath.StrokeThickness
+                    });
+                    break;
+                case PageNote pageNote:
+                    // у неактивной PageNote живых детей не бывает - её содержимое уже данные (NestedItems)
+                    result.Add(new NoteItemData
+                    {
+                        Type = "Page",
+                        X = Canvas.GetLeft(pageNote),
+                        Y = Canvas.GetTop(pageNote),
+                        Text = pageNote.Title,
+                        CameraX = pageNote.NestedCameraX,
+                        CameraY = pageNote.NestedCameraY,
+                        CameraZoom = pageNote.NestedCameraZoom,
+                        Children = pageNote.NestedItems
+                    });
+                    break;
+            }
+        }
+        return result;
+    }
+
+    // воссоздаёт живые элементы ОДНОГО уровня прямо на paintSurface (вложенные страницы
+    // остаются данными до открытия). baseDir != null - грузим из распакованного zip
+    // (FileName относительный); baseDir == null - навигация внутри сессии (FileName уже абсолютный)
+    private async Task MaterializeIntoSurfaceAsync(List<NoteItemData> items, string? baseDir)
+    {
+        paintSurface.Children.Clear();
+        foreach (var item in items)
+        {
+            switch (item.Type)
+            {
+                case "Text":
+                    var note = CreateRichTextNote(item.X, item.Y);
+                    // WebView2 нужно сначала добавить в визуальное дерево (получить родительское окно/HWND),
+                    // и только потом инициализировать - иначе EnsureCoreWebView2Async не отрабатывает
+                    paintSurface.Children.Add(note);
+                    await note.InitializeAsync(item.Text ?? string.Empty);
+                    break;
+                case "Photo":
+                    if (!string.IsNullOrEmpty(item.FileName))
+                    {
+                        string imagePath = ResolvePhotoPath(item.FileName, baseDir);
+                        if (File.Exists(imagePath))
+                            paintSurface.Children.Add(CreatePhotoNote(item.X, item.Y, imagePath, item.Text ?? string.Empty, item.CaptionExpanded));
+                    }
+                    break;
+                case "Stroke":
+                    if (item.Points != null && item.Points.Count > 0)
+                    {
+                        Color strokeColor = Colors.Black;
+                        if (!string.IsNullOrEmpty(item.Color))
+                        {
+                            try { strokeColor = (Color)ColorConverter.ConvertFromString(item.Color); }
+                            catch { /* старый файл без цвета или повреждённое значение - используем чёрный */ }
+                        }
+                        double thickness = item.Thickness > 0 ? item.Thickness : 1.5;
+                        paintSurface.Children.Add(CreateStrokePath(item.Points, strokeColor, thickness));
+                    }
+                    break;
+                case "Page":
+                    paintSurface.Children.Add(CreatePageNote(item.X, item.Y, item.Text ?? "Новая страница",
+                        item.Children ?? new(), item.CameraX, item.CameraY, item.CameraZoom));
+                    break;
+            }
+        }
+    }
+
+    private static string ResolvePhotoPath(string fileName, string? baseDir)
+    {
+        return baseDir == null || IOPath.IsPathRooted(fileName) ? fileName : IOPath.Combine(baseDir, fileName);
+    }
+
+    // чистая копия по данным (без UI) для сохранения на диск: копирует файлы фото
+    // (FileName здесь всегда абсолютный) в imagesDir и переписывает путь на относительный
+    // от пакета; рекурсивно обходит Children у "Page". Используется для ВСЕГО дерева,
+    // включая активную страницу - после SpliceWithAncestors разницы между уровнями уже нет
+    private List<NoteItemData> CopyDataTreeForSave(List<NoteItemData> items, string imagesDir, ref int photoIndex)
+    {
+        var result = new List<NoteItemData>(items.Count);
+        foreach (var item in items)
+        {
+            if (item.Type == "Photo" && !string.IsNullOrEmpty(item.FileName))
+            {
+                string sourcePath = item.FileName;
+                string ext = string.IsNullOrEmpty(IOPath.GetExtension(sourcePath)) ? ".png" : IOPath.GetExtension(sourcePath);
+                string fileName = $"photo{photoIndex++}{ext}";
+                if (File.Exists(sourcePath))
+                    File.Copy(sourcePath, IOPath.Combine(imagesDir, fileName), overwrite: true);
+                result.Add(new NoteItemData
+                {
+                    Type = "Photo",
+                    X = item.X,
+                    Y = item.Y,
+                    FileName = "images/" + fileName,
+                    Text = item.Text,
+                    CaptionExpanded = item.CaptionExpanded
+                });
+            }
+            else if (item.Type == "Page")
+            {
+                result.Add(new NoteItemData
+                {
+                    Type = "Page",
+                    X = item.X,
+                    Y = item.Y,
+                    Text = item.Text,
+                    CameraX = item.CameraX,
+                    CameraY = item.CameraY,
+                    CameraZoom = item.CameraZoom,
+                    Children = CopyDataTreeForSave(item.Children ?? new(), imagesDir, ref photoIndex)
+                });
+            }
+            else
+            {
+                result.Add(item);
+            }
+        }
+        return result;
+    }
+
     private async void SaveZametki(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog
@@ -514,49 +794,19 @@ public partial class WorkDirectory : Window
         string imagesDir = IOPath.Combine(tempDir, "images");
         Directory.CreateDirectory(imagesDir);
 
-        var document = new NoteDocument();
-        int photoIndex = 1;
+        var activeItems = await SerializeActivePageAsync(paintSurface.Children.Cast<UIElement>());
 
-        foreach (UIElement child in paintSurface.Children)
+        // если сейчас не в корне - достраиваем цепочку предков, подставляя свежесериализованное
+        // содержимое в нужное место каждого уровня; то, что видно на экране, не трогаем
+        var rootItems = activeItems;
+        for (int i = _pageStack.Count - 1; i >= 0; i--)
         {
-            switch (child)
-            {
-                case RichTextNote richTextNote:
-                    document.Items.Add(new NoteItemData
-                    {
-                        Type = "Text",
-                        X = Canvas.GetLeft(richTextNote),
-                        Y = Canvas.GetTop(richTextNote),
-                        Text = await richTextNote.GetContentAsync()
-                    });
-                    break;
-                case PhotoNote photoNote:
-                    string sourcePath = photoNote.SourcePath;
-                    string ext = string.IsNullOrEmpty(IOPath.GetExtension(sourcePath)) ? ".png" : IOPath.GetExtension(sourcePath);
-                    string fileName = $"photo{photoIndex++}{ext}";
-                    if (File.Exists(sourcePath))
-                        File.Copy(sourcePath, IOPath.Combine(imagesDir, fileName), overwrite: true);
-                    document.Items.Add(new NoteItemData
-                    {
-                        Type = "Photo",
-                        X = Canvas.GetLeft(photoNote),
-                        Y = Canvas.GetTop(photoNote),
-                        FileName = "images/" + fileName,
-                        Text = photoNote.CaptionText,
-                        CaptionExpanded = photoNote.IsCaptionExpanded
-                    });
-                    break;
-                case ShapePath strokePath when strokePath.Tag is List<Point> strokePoints:
-                    document.Items.Add(new NoteItemData
-                    {
-                        Type = "Stroke",
-                        Points = strokePoints,
-                        Color = (strokePath.Stroke as SolidColorBrush)?.Color.ToString(),
-                        Thickness = strokePath.StrokeThickness
-                    });
-                    break;
-            }
+            _pageStack[i].ParentItems[_pageStack[i].SourceNoteIndex].Children = rootItems;
+            rootItems = _pageStack[i].ParentItems;
         }
+
+        int photoIndex = 1;
+        var document = new NoteDocument { Items = CopyDataTreeForSave(rootItems, imagesDir, ref photoIndex) };
 
         string json = JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
         File.WriteAllText(IOPath.Combine(tempDir, "manifest.json"), json);
@@ -581,42 +831,17 @@ public partial class WorkDirectory : Window
         if (document == null)
             return;
 
-        paintSurface.Children.Clear();
         _undoStack.Clear();
         _redoStack.Clear();
+        _pageStack.Clear();
 
-        foreach (var item in document.Items)
-        {
-            switch (item.Type)
-            {
-                case "Text":
-                    var note = CreateRichTextNote(item.X, item.Y);
-                    paintSurface.Children.Add(note);
-                    await note.InitializeAsync(item.Text ?? string.Empty);
-                    break;
-                case "Photo":
-                    if (!string.IsNullOrEmpty(item.FileName))
-                    {
-                        string imagePath = IOPath.Combine(tempDir, item.FileName);
-                        if (File.Exists(imagePath))
-                            paintSurface.Children.Add(CreatePhotoNote(item.X, item.Y, imagePath, item.Text ?? string.Empty, item.CaptionExpanded));
-                    }
-                    break;
-                case "Stroke":
-                    if (item.Points != null && item.Points.Count > 0)
-                    {
-                        Color strokeColor = Colors.Black;
-                        if (!string.IsNullOrEmpty(item.Color))
-                        {
-                            try { strokeColor = (Color)ColorConverter.ConvertFromString(item.Color); }
-                            catch { /* старый файл без цвета или повреждённое значение - используем чёрный */ }
-                        }
-                        double thickness = item.Thickness > 0 ? item.Thickness : 1.5;
-                        paintSurface.Children.Add(CreateStrokePath(item.Points, strokeColor, thickness));
-                    }
-                    break;
-            }
-        }
+        await MaterializeIntoSurfaceAsync(document.Items, tempDir);
+
+        CameraX = 0; CameraY = 0; CameraZoom = 1.0;
+        scaleTransform.ScaleX = CameraZoom;
+        scaleTransform.ScaleY = CameraZoom;
+        UpdateCamera();
+        UpdateBreadcrumb();
     }
 }
 
