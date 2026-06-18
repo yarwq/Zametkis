@@ -5,29 +5,33 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:local="clr-namespace:Zametkis"
         mc:Ignorable="d"
-        Height="800" Width="800">
+        Title="Zametkis" Height="800" Width="1100"
+        WindowState="Maximized"
+        Background="{StaticResource BackgroundBrush}"
+        FontFamily="Segoe UI">
     <Grid Name="Grid1">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0" Orientation="Horizontal" Background="Aqua">
-        <Button Grid.Row="0" x:Name="Paint" Content="Add A Paint"
-                Click="AddPaint" ClickMode="Press"
-                Width="150"
-                Height="50"
-                Foreground="Blue"/>
-        <Button Grid.Row="0" x:Name="Text" Content="Add A Text" Padding="0,0,10,0"
-                Click="AddText" ClickMode="Press"
-                Width="150"
-                Height="50"
-                Foreground="Blue"/>
-        <Button Grid.Row="0" x:Name="Photo" Content="Add A Photo" Padding="0,0,10,0"
-                Click="AddPhoto" ClickMode="Press"
-                Width="150"
-                Height="50"
-                Foreground="Blue"/>
-        </StackPanel>
+        <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal" Margin="16,12">
+                <Button x:Name="PaintToolButton" Content="Рисование"
+                        Click="AddPaint" ClickMode="Press"
+                        Style="{StaticResource ToolButtonStyle}"/>
+                <Button x:Name="TextToolButton" Content="Текст"
+                        Click="AddText" ClickMode="Press"
+                        Style="{StaticResource ToolButtonStyle}"/>
+                <Button x:Name="PhotoToolButton" Content="Фото"
+                        Click="AddPhoto" ClickMode="Press"
+                        Style="{StaticResource ToolButtonStyle}"/>
+                <Border Width="1" Margin="4,4" Background="{StaticResource BorderBrush}"/>
+                <Button x:Name="SaveButton" Content="Сохранить"
+                        Click="SaveZametki" ClickMode="Press"
+                        Style="{StaticResource ToolButtonStyle}"/>
+            </StackPanel>
+        </Border>
         <Canvas Name="paintSurface" Grid.Row="1"
                 MouseMove="DrawME" MouseDown="PaintME"
                 MouseLeftButtonDown="WorkWithTool" MouseWheel="ZoomInAndOut"
@@ -36,12 +40,12 @@
                 <DrawingBrush TileMode="Tile" Viewport="0,0,24,24" ViewportUnits="Absolute" Stretch="None">
                     <DrawingBrush.Drawing>
                         <DrawingGroup>
-                            <GeometryDrawing Brush="White">
+                            <GeometryDrawing Brush="#FFFBFBFD">
                                 <GeometryDrawing.Geometry>
                                     <RectangleGeometry Rect="0,0,24,24"/>
                                 </GeometryDrawing.Geometry>
                             </GeometryDrawing>
-                            <GeometryDrawing Brush="#FFC0C0C0">
+                            <GeometryDrawing Brush="#FFD3D3DE">
                                 <GeometryDrawing.Geometry>
                                     <EllipseGeometry Center="12,12" RadiusX="1.3" RadiusY="1.3"/>
                                 </GeometryDrawing.Geometry>

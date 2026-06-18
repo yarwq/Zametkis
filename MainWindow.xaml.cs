@@ -35,7 +35,15 @@ public partial class MainWindow : Window
     
     private void ReadZametki(object sender, RoutedEventArgs e)
     {
-        //here in future i must add a 
-        
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Filter = "Заметки Zametkis (*.zametki)|*.zametki"
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        workDirectory.LoadDocument(dialog.FileName);
+        zametki.Visibility = Visibility.Hidden;
+        workDirectory.Show();
     }
 }

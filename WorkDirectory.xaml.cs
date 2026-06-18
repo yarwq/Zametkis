@@ -1,4 +1,9 @@
-﻿using System.Windows;
+﻿using System.IO;
+using System.IO.Compression;
+using System.Text.Json;
+using IOPath = System.IO.Path;
+using ShapePath = System.Windows.Shapes.Path;
+using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
@@ -7,6 +12,7 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Microsoft.Win32;
 using Zametkis.Enums;
+using Zametkis.Models;
 
 namespace Zametkis;
 
@@ -21,11 +27,23 @@ public partial class WorkDirectory : Window
     private ToolsZametki _currentTool;
     private Window workWindow;
     private TranslateTransform translate;
+    private List<Point>? _currentStrokePoints;
+    private ShapePath? _currentStrokeShape;
     public WorkDirectory()
     {
         _currentTool = ToolsZametki.None;
         InitializeComponent();
-        paintSurface.RenderTransform = translate = new TranslateTransform();
+
+        // зум и панорамирование - через RenderTransform, а не LayoutTransform:
+        // LayoutTransform участвует в раскладке и сжимает локальный размер канваса при масштабировании,
+        // из-за чего тайловая сетка точек на фоне рендерится нестабильно на больших зумах
+        scaleTransform = new ScaleTransform(1.0, 1.0);
+        translate = new TranslateTransform();
+        var transformGroup = new TransformGroup();
+        transformGroup.Children.Add(scaleTransform);
+        transformGroup.Children.Add(translate);
+        paintSurface.RenderTransform = transformGroup;
+
         workWindow = Window.GetWindow(this);
     }
 
@@ -33,10 +51,11 @@ public partial class WorkDirectory : Window
     {
         if (_currentTool != ToolsZametki.Paint)
         _currentTool = ToolsZametki.Paint;
-        else 
+        else
         {
             _currentTool = ToolsZametki.None;
         }
+        UpdateToolButtonVisuals();
     }
 
     private void AddText(object sender, RoutedEventArgs e)
@@ -47,6 +66,7 @@ public partial class WorkDirectory : Window
         {
             _currentTool = ToolsZametki.None;
         }
+        UpdateToolButtonVisuals();
     }
 
     private void AddPhoto(object sender, RoutedEventArgs e)
@@ -57,24 +77,31 @@ public partial class WorkDirectory : Window
         {
             _currentTool = ToolsZametki.None;
         }
+        UpdateToolButtonVisuals();
+    }
+
+    private void UpdateToolButtonVisuals()
+    {
+        SetToolButtonActive(PaintToolButton, _currentTool == ToolsZametki.Paint);
+        SetToolButtonActive(TextToolButton, _currentTool == ToolsZametki.Text);
+        SetToolButtonActive(PhotoToolButton, _currentTool == ToolsZametki.Photo);
+    }
+
+    private void SetToolButtonActive(Button button, bool active)
+    {
+        button.Style = (Style)FindResource(active ? "ToolButtonActiveStyle" : "ToolButtonStyle");
     }
 
     private void WorkWithTool(object sender, MouseButtonEventArgs e)
     {
         var pos = Mouse.GetPosition(paintSurface);
-        
+
         var posX = pos.X;
         var posY = pos.Y;
         switch (_currentTool)
         {
             case ToolsZametki.Text:
-                TextBox tb = new TextBox();
-                tb.MinWidth = 60;
-                tb.MinHeight = 20;
-                tb.AcceptsReturn = true;
-                tb.SetValue(Canvas.TopProperty, posY );
-                tb.SetValue(Canvas.LeftProperty, posX);
-                paintSurface.Children.Add(tb);
+                paintSurface.Children.Add(CreateTextBox(posX, posY, string.Empty));
                 break;
             case ToolsZametki.Photo:
                 var dialog = new OpenFileDialog
@@ -83,13 +110,7 @@ public partial class WorkDirectory : Window
                 };
                 if (dialog.ShowDialog() == true)
                 {
-                    Image image = new Image();
-                    image.Source = new BitmapImage(new Uri(dialog.FileName));
-                    image.Width = 200;
-                    image.Stretch = Stretch.Uniform;
-                    image.SetValue(Canvas.TopProperty, posY);
-                    image.SetValue(Canvas.LeftProperty, posX);
-                    paintSurface.Children.Add(image);
+                    paintSurface.Children.Add(CreateImage(posX, posY, dialog.FileName));
                 }
                 break;
             case ToolsZametki.Paint:
@@ -97,6 +118,85 @@ public partial class WorkDirectory : Window
             default:
                 break;
         }
+    }
+
+    private static TextBox CreateTextBox(double x, double y, string text)
+    {
+        TextBox tb = new TextBox
+        {
+            MinWidth = 60,
+            MinHeight = 20,
+            AcceptsReturn = true,
+            Text = text
+        };
+        Canvas.SetLeft(tb, x);
+        Canvas.SetTop(tb, y);
+        return tb;
+    }
+
+    private static Image CreateImage(double x, double y, string filePath)
+    {
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(filePath);
+        bitmap.EndInit();
+
+        Image image = new Image
+        {
+            Source = bitmap,
+            Width = 200,
+            Stretch = Stretch.Uniform
+        };
+        Canvas.SetLeft(image, x);
+        Canvas.SetTop(image, y);
+        return image;
+    }
+
+    private static ShapePath CreateStrokePath(List<Point> points)
+    {
+        return new ShapePath
+        {
+            Stroke = SystemColors.WindowFrameBrush,
+            StrokeThickness = 1.5,
+            StrokeLineJoin = PenLineJoin.Round,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            Data = BuildSmoothGeometry(points),
+            Tag = points
+        };
+    }
+
+    // строим гладкую кривую через все точки мазка (Catmull-Rom, переведённый в кубические Bezier-сегменты),
+    // иначе при сильном зуме виден ломаный набор прямых отрезков, по которым мазок был "сэмплирован"
+    private static PathGeometry BuildSmoothGeometry(List<Point> points)
+    {
+        var figure = new PathFigure { StartPoint = points[0], IsClosed = false };
+
+        if (points.Count < 3)
+        {
+            for (int i = 1; i < points.Count; i++)
+                figure.Segments.Add(new LineSegment(points[i], true));
+        }
+        else
+        {
+            for (int i = 0; i < points.Count - 1; i++)
+            {
+                Point p0 = i == 0 ? points[i] : points[i - 1];
+                Point p1 = points[i];
+                Point p2 = points[i + 1];
+                Point p3 = i + 2 < points.Count ? points[i + 2] : p2;
+
+                Point c1 = new Point(p1.X + (p2.X - p0.X) / 6.0, p1.Y + (p2.Y - p0.Y) / 6.0);
+                Point c2 = new Point(p2.X - (p3.X - p1.X) / 6.0, p2.Y - (p3.Y - p1.Y) / 6.0);
+
+                figure.Segments.Add(new BezierSegment(c1, c2, p2, true));
+            }
+        }
+
+        var geometry = new PathGeometry();
+        geometry.Figures.Add(figure);
+        return geometry;
     }
 
     private void ZoomInAndOut(object sender, MouseWheelEventArgs e)
@@ -114,8 +214,8 @@ public partial class WorkDirectory : Window
         CameraX = worldMouse.X - (worldMouse.X - CameraX) * ratio;
         CameraY = worldMouse.Y - (worldMouse.Y - CameraY) * ratio;
 
-        scaleTransform = new ScaleTransform(CameraZoom, CameraZoom);
-        paintSurface.LayoutTransform = scaleTransform;
+        scaleTransform.ScaleX = CameraZoom;
+        scaleTransform.ScaleY = CameraZoom;
         UpdateCamera();
     }
     
@@ -142,7 +242,11 @@ public partial class WorkDirectory : Window
         {
             case ToolsZametki.Paint:
                 if (e.ButtonState == MouseButtonState.Pressed)
-                    currentPoint = Mouse.GetPosition(paintSurface);
+                {
+                    _currentStrokePoints = new List<Point> { Mouse.GetPosition(paintSurface) };
+                    _currentStrokeShape = CreateStrokePath(_currentStrokePoints);
+                    paintSurface.Children.Add(_currentStrokeShape);
+                }
                 break;
             case ToolsZametki.None:
                 if (e.ButtonState == MouseButtonState.Pressed)
@@ -165,22 +269,10 @@ public partial class WorkDirectory : Window
         switch (_currentTool)
         {
             case ToolsZametki.Paint:
-                if (e.LeftButton == MouseButtonState.Pressed)
+                if (e.LeftButton == MouseButtonState.Pressed && _currentStrokePoints != null && _currentStrokeShape != null)
                 {
-                    Line line = new Line();
-
-                    line.Stroke = SystemColors.WindowFrameBrush;
-                    var worldMouse = Mouse.GetPosition(paintSurface);
-
-                    line.X1 = currentPoint.X;
-                    line.Y1 = currentPoint.Y;
-
-                    line.X2 = worldMouse.X;
-                    line.Y2 = worldMouse.Y;
-
-                    currentPoint = worldMouse;
-
-                    paintSurface.Children.Add(line);
+                    _currentStrokePoints.Add(Mouse.GetPosition(paintSurface));
+                    _currentStrokeShape.Data = BuildSmoothGeometry(_currentStrokePoints);
                 }
                 break;
             case ToolsZametki.None:
@@ -209,6 +301,111 @@ public partial class WorkDirectory : Window
             paintSurface.ReleaseMouseCapture();
         }
 
+        _currentStrokePoints = null;
+        _currentStrokeShape = null;
+    }
+
+    private void SaveZametki(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Filter = "Заметки Zametkis (*.zametki)|*.zametki",
+            DefaultExt = "zametki",
+            FileName = "Заметка"
+        };
+        if (dialog.ShowDialog() != true)
+            return;
+
+        string tempDir = IOPath.Combine(IOPath.GetTempPath(), "Zametkis_" + Guid.NewGuid());
+        string imagesDir = IOPath.Combine(tempDir, "images");
+        Directory.CreateDirectory(imagesDir);
+
+        var document = new NoteDocument();
+        int photoIndex = 1;
+
+        foreach (UIElement child in paintSurface.Children)
+        {
+            switch (child)
+            {
+                case TextBox tb:
+                    document.Items.Add(new NoteItemData
+                    {
+                        Type = "Text",
+                        X = Canvas.GetLeft(tb),
+                        Y = Canvas.GetTop(tb),
+                        Text = tb.Text
+                    });
+                    break;
+                case Image img:
+                    string sourcePath = (img.Source as BitmapImage)?.UriSource?.LocalPath ?? string.Empty;
+                    string ext = string.IsNullOrEmpty(sourcePath) ? ".png" : IOPath.GetExtension(sourcePath);
+                    string fileName = $"photo{photoIndex++}{ext}";
+                    if (!string.IsNullOrEmpty(sourcePath) && File.Exists(sourcePath))
+                        File.Copy(sourcePath, IOPath.Combine(imagesDir, fileName), overwrite: true);
+                    document.Items.Add(new NoteItemData
+                    {
+                        Type = "Photo",
+                        X = Canvas.GetLeft(img),
+                        Y = Canvas.GetTop(img),
+                        FileName = "images/" + fileName
+                    });
+                    break;
+                case ShapePath strokePath when strokePath.Tag is List<Point> strokePoints:
+                    document.Items.Add(new NoteItemData
+                    {
+                        Type = "Stroke",
+                        Points = strokePoints
+                    });
+                    break;
+            }
+        }
+
+        string json = JsonSerializer.Serialize(document, new JsonSerializerOptions { WriteIndented = true });
+        File.WriteAllText(IOPath.Combine(tempDir, "manifest.json"), json);
+
+        if (File.Exists(dialog.FileName))
+            File.Delete(dialog.FileName);
+        ZipFile.CreateFromDirectory(tempDir, dialog.FileName);
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    public void LoadDocument(string path)
+    {
+        string tempDir = IOPath.Combine(IOPath.GetTempPath(), "Zametkis_open_" + Guid.NewGuid());
+        ZipFile.ExtractToDirectory(path, tempDir);
+
+        string manifestPath = IOPath.Combine(tempDir, "manifest.json");
+        if (!File.Exists(manifestPath))
+            return;
+
+        string json = File.ReadAllText(manifestPath);
+        var document = JsonSerializer.Deserialize<NoteDocument>(json);
+        if (document == null)
+            return;
+
+        paintSurface.Children.Clear();
+
+        foreach (var item in document.Items)
+        {
+            switch (item.Type)
+            {
+                case "Text":
+                    paintSurface.Children.Add(CreateTextBox(item.X, item.Y, item.Text ?? string.Empty));
+                    break;
+                case "Photo":
+                    if (!string.IsNullOrEmpty(item.FileName))
+                    {
+                        string imagePath = IOPath.Combine(tempDir, item.FileName);
+                        if (File.Exists(imagePath))
+                            paintSurface.Children.Add(CreateImage(item.X, item.Y, imagePath));
+                    }
+                    break;
+                case "Stroke":
+                    if (item.Points != null && item.Points.Count > 0)
+                        paintSurface.Children.Add(CreateStrokePath(item.Points));
+                    break;
+            }
+        }
     }
 }
 

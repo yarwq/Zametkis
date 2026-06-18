@@ -5,29 +5,30 @@
                    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
                    xmlns:local="clr-namespace:Zametkis"
                    mc:Ignorable="d"
-                   Title="Zametkis" Height="500" Width="500">
-    <Grid Background="AliceBlue">
-            <TextBlock Margin="0,20,0,0"
-                       HorizontalAlignment="Center">
-                    <Bold> Hello! I wish u r good</Bold>
-                    
-            </TextBlock>
-            <StackPanel x:Name="LayoutRoot" Margin="10">
-                    <Button x:Name="btn1" Content="Create a new Zametki"
-                            Click="CreateNewZametki" ClickMode="Press"
-                            Width="150" 
-            
-                            Margin="0,30, 0,30"
-                            HorizontalAlignment="Center" 
-                            VerticalAlignment="Center" 
-                            Foreground="Blue"/>
-    
-    <Button x:Name="btn2" Content="Load a Zametki"
-            Click="ReadZametki" ClickMode="Press"
-            Width="150"
-            VerticalAlignment="Center"
-            HorizontalAlignment="Center"
-            Foreground="Blue"/>
-    </StackPanel>
+                   Title="Zametkis" Height="500" Width="500"
+                   Background="{StaticResource BackgroundBrush}"
+                   FontFamily="Segoe UI"
+                   WindowStartupLocation="CenterScreen">
+    <Grid>
+        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Width="280">
+            <TextBlock Text="Zametkis" FontSize="32" FontWeight="Bold"
+                       Foreground="{StaticResource TextPrimaryBrush}"
+                       HorizontalAlignment="Center"/>
+            <TextBlock Text="Бесконечная доска для заметок" FontSize="13"
+                       Foreground="{StaticResource TextSecondaryBrush}"
+                       Margin="0,6,0,32"
+                       HorizontalAlignment="Center"/>
+
+            <Button x:Name="btn1" Content="Создать новую заметку"
+                    Click="CreateNewZametki" ClickMode="Press"
+                    Style="{StaticResource PrimaryButtonStyle}"
+                    HorizontalAlignment="Stretch"
+                    Margin="0,0,0,12"/>
+
+            <Button x:Name="btn2" Content="Открыть заметку"
+                    Click="ReadZametki" ClickMode="Press"
+                    Style="{StaticResource SecondaryButtonStyle}"
+                    HorizontalAlignment="Stretch"/>
+        </StackPanel>
     </Grid>
 </Window>
