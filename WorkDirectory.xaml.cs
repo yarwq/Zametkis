@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Microsoft.Win32;
+using Zametkis.Controls;
 using Zametkis.Enums;
 using Zametkis.Models;
 
@@ -29,6 +30,8 @@ public partial class WorkDirectory : Window
     private TranslateTransform translate;
     private List<Point>? _currentStrokePoints;
     private ShapePath? _currentStrokeShape;
+    private readonly List<UIElement> _undoStack = new();
+    private readonly List<UIElement> _redoStack = new();
     public WorkDirectory()
     {
         _currentTool = ToolsZametki.None;
@@ -45,6 +48,78 @@ public partial class WorkDirectory : Window
         paintSurface.RenderTransform = transformGroup;
 
         workWindow = Window.GetWindow(this);
+        UpdateCamera();
+
+        Closed += WorkDirectory_Closed;
+        KeyDown += WorkDirectory_KeyDown;
+    }
+
+    // когда доска закрывается (крестиком или иначе) - закрываем все WebView2-редакторы
+    // и принудительно завершаем процесс целиком, иначе скрытое MainWindow не даст приложению выйти
+    private void WorkDirectory_Closed(object? sender, EventArgs e)
+    {
+        foreach (var note in paintSurface.Children.OfType<RichTextNote>().ToList())
+            note.CloseEditor();
+
+        Application.Current.Shutdown();
+    }
+
+    private void WorkDirectory_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (!Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+            return;
+
+        if (e.Key == Key.S)
+        {
+            SaveZametki(this, new RoutedEventArgs());
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Z && Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+        {
+            Redo();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Z)
+        {
+            Undo();
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Y)
+        {
+            Redo();
+            e.Handled = true;
+        }
+    }
+
+    // отслеживаем только добавление целых элементов (текст/фото/мазок) - этого достаточно
+    // для "базового" undo/redo; редактирование текста внутри заметки откатывается родным
+    // undo браузера в самом WebView2
+    private void RegisterAddedItem(UIElement element)
+    {
+        _undoStack.Add(element);
+        _redoStack.Clear();
+    }
+
+    private void Undo()
+    {
+        if (_undoStack.Count == 0)
+            return;
+
+        var item = _undoStack[^1];
+        _undoStack.RemoveAt(_undoStack.Count - 1);
+        paintSurface.Children.Remove(item);
+        _redoStack.Add(item);
+    }
+
+    private void Redo()
+    {
+        if (_redoStack.Count == 0)
+            return;
+
+        var item = _redoStack[^1];
+        _redoStack.RemoveAt(_redoStack.Count - 1);
+        paintSurface.Children.Add(item);
+        _undoStack.Add(item);
     }
 
     private void AddPaint(object sender, RoutedEventArgs e)
@@ -92,7 +167,7 @@ public partial class WorkDirectory : Window
         button.Style = (Style)FindResource(active ? "ToolButtonActiveStyle" : "ToolButtonStyle");
     }
 
-    private void WorkWithTool(object sender, MouseButtonEventArgs e)
+    private async void WorkWithTool(object sender, MouseButtonEventArgs e)
     {
         var pos = Mouse.GetPosition(paintSurface);
 
@@ -101,7 +176,23 @@ public partial class WorkDirectory : Window
         switch (_currentTool)
         {
             case ToolsZametki.Text:
-                paintSurface.Children.Add(CreateTextBox(posX, posY, string.Empty));
+                // инструмент одноразовый: после размещения заметки сразу выходим в "None",
+                // иначе следующий клик (даже чтобы поставить курсор в саму заметку) создаст ещё одну
+                _currentTool = ToolsZametki.None;
+                UpdateToolButtonVisuals();
+                try
+                {
+                    var note = CreateRichTextNote(posX, posY);
+                    // WebView2 нужно сначала добавить в визуальное дерево (получить родительское окно/HWND),
+                    // и только потом инициализировать - иначе EnsureCoreWebView2Async не отрабатывает
+                    paintSurface.Children.Add(note);
+                    RegisterAddedItem(note);
+                    await note.InitializeAsync(string.Empty, focusAfterInit: true);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Не удалось создать текстовую заметку: {ex.Message}", "Zametkis", MessageBoxButton.OK, MessageBoxImage.Error);
+                }
                 break;
             case ToolsZametki.Photo:
                 var dialog = new OpenFileDialog
@@ -110,7 +201,11 @@ public partial class WorkDirectory : Window
                 };
                 if (dialog.ShowDialog() == true)
                 {
-                    paintSurface.Children.Add(CreateImage(posX, posY, dialog.FileName));
+                    _currentTool = ToolsZametki.None;
+                    UpdateToolButtonVisuals();
+                    var photoNote = CreatePhotoNote(posX, posY, dialog.FileName, string.Empty, true);
+                    paintSurface.Children.Add(photoNote);
+                    RegisterAddedItem(photoNote);
                 }
                 break;
             case ToolsZametki.Paint:
@@ -120,37 +215,30 @@ public partial class WorkDirectory : Window
         }
     }
 
-    private static TextBox CreateTextBox(double x, double y, string text)
+    private static RichTextNote CreateRichTextNote(double x, double y)
     {
-        TextBox tb = new TextBox
-        {
-            MinWidth = 60,
-            MinHeight = 20,
-            AcceptsReturn = true,
-            Text = text
-        };
-        Canvas.SetLeft(tb, x);
-        Canvas.SetTop(tb, y);
-        return tb;
+        var note = new RichTextNote();
+        Canvas.SetLeft(note, x);
+        Canvas.SetTop(note, y);
+        return note;
     }
 
-    private static Image CreateImage(double x, double y, string filePath)
+    private static BitmapImage LoadBitmap(string filePath)
     {
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.UriSource = new Uri(filePath);
         bitmap.EndInit();
+        return bitmap;
+    }
 
-        Image image = new Image
-        {
-            Source = bitmap,
-            Width = 200,
-            Stretch = Stretch.Uniform
-        };
-        Canvas.SetLeft(image, x);
-        Canvas.SetTop(image, y);
-        return image;
+    private static PhotoNote CreatePhotoNote(double x, double y, string filePath, string caption, bool expanded)
+    {
+        var photoNote = new PhotoNote(LoadBitmap(filePath), filePath, caption, expanded);
+        Canvas.SetLeft(photoNote, x);
+        Canvas.SetTop(photoNote, y);
+        return photoNote;
     }
 
     private static ShapePath CreateStrokePath(List<Point> points)
@@ -226,6 +314,11 @@ public partial class WorkDirectory : Window
     {
         translate.X = -CameraX * CameraZoom;
         translate.Y = -CameraY * CameraZoom;
+
+        dotGridBackground.CameraX = CameraX;
+        dotGridBackground.CameraY = CameraY;
+        dotGridBackground.CameraZoom = CameraZoom;
+        dotGridBackground.InvalidateVisual();
     }
     
     
@@ -246,6 +339,7 @@ public partial class WorkDirectory : Window
                     _currentStrokePoints = new List<Point> { Mouse.GetPosition(paintSurface) };
                     _currentStrokeShape = CreateStrokePath(_currentStrokePoints);
                     paintSurface.Children.Add(_currentStrokeShape);
+                    RegisterAddedItem(_currentStrokeShape);
                 }
                 break;
             case ToolsZametki.None:
@@ -305,7 +399,7 @@ public partial class WorkDirectory : Window
         _currentStrokeShape = null;
     }
 
-    private void SaveZametki(object sender, RoutedEventArgs e)
+    private async void SaveZametki(object sender, RoutedEventArgs e)
     {
         var dialog = new SaveFileDialog
         {
@@ -327,27 +421,29 @@ public partial class WorkDirectory : Window
         {
             switch (child)
             {
-                case TextBox tb:
+                case RichTextNote richTextNote:
                     document.Items.Add(new NoteItemData
                     {
                         Type = "Text",
-                        X = Canvas.GetLeft(tb),
-                        Y = Canvas.GetTop(tb),
-                        Text = tb.Text
+                        X = Canvas.GetLeft(richTextNote),
+                        Y = Canvas.GetTop(richTextNote),
+                        Text = await richTextNote.GetContentAsync()
                     });
                     break;
-                case Image img:
-                    string sourcePath = (img.Source as BitmapImage)?.UriSource?.LocalPath ?? string.Empty;
-                    string ext = string.IsNullOrEmpty(sourcePath) ? ".png" : IOPath.GetExtension(sourcePath);
+                case PhotoNote photoNote:
+                    string sourcePath = photoNote.SourcePath;
+                    string ext = string.IsNullOrEmpty(IOPath.GetExtension(sourcePath)) ? ".png" : IOPath.GetExtension(sourcePath);
                     string fileName = $"photo{photoIndex++}{ext}";
-                    if (!string.IsNullOrEmpty(sourcePath) && File.Exists(sourcePath))
+                    if (File.Exists(sourcePath))
                         File.Copy(sourcePath, IOPath.Combine(imagesDir, fileName), overwrite: true);
                     document.Items.Add(new NoteItemData
                     {
                         Type = "Photo",
-                        X = Canvas.GetLeft(img),
-                        Y = Canvas.GetTop(img),
-                        FileName = "images/" + fileName
+                        X = Canvas.GetLeft(photoNote),
+                        Y = Canvas.GetTop(photoNote),
+                        FileName = "images/" + fileName,
+                        Text = photoNote.CaptionText,
+                        CaptionExpanded = photoNote.IsCaptionExpanded
                     });
                     break;
                 case ShapePath strokePath when strokePath.Tag is List<Point> strokePoints:
@@ -369,7 +465,7 @@ public partial class WorkDirectory : Window
         Directory.Delete(tempDir, recursive: true);
     }
 
-    public void LoadDocument(string path)
+    public async Task LoadDocument(string path)
     {
         string tempDir = IOPath.Combine(IOPath.GetTempPath(), "Zametkis_open_" + Guid.NewGuid());
         ZipFile.ExtractToDirectory(path, tempDir);
@@ -384,20 +480,24 @@ public partial class WorkDirectory : Window
             return;
 
         paintSurface.Children.Clear();
+        _undoStack.Clear();
+        _redoStack.Clear();
 
         foreach (var item in document.Items)
         {
             switch (item.Type)
             {
                 case "Text":
-                    paintSurface.Children.Add(CreateTextBox(item.X, item.Y, item.Text ?? string.Empty));
+                    var note = CreateRichTextNote(item.X, item.Y);
+                    paintSurface.Children.Add(note);
+                    await note.InitializeAsync(item.Text ?? string.Empty);
                     break;
                 case "Photo":
                     if (!string.IsNullOrEmpty(item.FileName))
                     {
                         string imagePath = IOPath.Combine(tempDir, item.FileName);
                         if (File.Exists(imagePath))
-                            paintSurface.Children.Add(CreateImage(item.X, item.Y, imagePath));
+                            paintSurface.Children.Add(CreatePhotoNote(item.X, item.Y, imagePath, item.Text ?? string.Empty, item.CaptionExpanded));
                     }
                     break;
                 case "Stroke":

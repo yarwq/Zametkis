@@ -24,6 +24,15 @@ public partial class MainWindow : Window
         InitializeComponent();
          zametki = Window.GetWindow(this);
          workDirectory = new WorkDirectory();
+
+         Closed += MainWindow_Closed;
+    }
+
+    // если пользователь закрывает именно главное окно (доска ещё не открыта или скрыта) -
+    // всё равно гарантируем полное завершение процесса; Shutdown() сам закроет остальные окна
+    private void MainWindow_Closed(object? sender, EventArgs e)
+    {
+        Application.Current.Shutdown();
     }
 
     private void CreateNewZametki(object sender, RoutedEventArgs e)
@@ -33,7 +42,7 @@ public partial class MainWindow : Window
             workDirectory.Show();
     }
     
-    private void ReadZametki(object sender, RoutedEventArgs e)
+    private async void ReadZametki(object sender, RoutedEventArgs e)
     {
         var dialog = new Microsoft.Win32.OpenFileDialog
         {
@@ -42,7 +51,7 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() != true)
             return;
 
-        workDirectory.LoadDocument(dialog.FileName);
+        await workDirectory.LoadDocument(dialog.FileName);
         zametki.Visibility = Visibility.Hidden;
         workDirectory.Show();
     }
