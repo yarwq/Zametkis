@@ -50,8 +50,6 @@ public class PageNote : Border
             Child = icon
         };
         openArea.MouseLeftButtonUp += (_, _) => OpenRequested?.Invoke(this, EventArgs.Empty);
-        openArea.MouseEnter += (_, _) => { var w = Window.GetWindow(openArea); if (w != null) w.Title = "DBG HOVER openArea"; };
-        openArea.MouseLeftButtonDown += (_, _) => { var w = Window.GetWindow(openArea); if (w != null) w.Title = "DBG MOUSEDOWN openArea"; };
 
         _titleBox = new TextBox
         {

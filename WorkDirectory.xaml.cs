@@ -27,7 +27,7 @@ public partial class WorkDirectory : Window
     private double _panStartCameraY;
     private ScaleTransform scaleTransform;
     private ToolsZametki _currentTool;
-    private Window workWindow;
+
     private TranslateTransform translate;
     private List<Point>? _currentStrokePoints;
     private ShapePath? _currentStrokeShape;
@@ -84,7 +84,6 @@ public partial class WorkDirectory : Window
         transformGroup.Children.Add(translate);
         paintSurface.RenderTransform = transformGroup;
 
-        workWindow = Window.GetWindow(this);
         UpdateCamera();
         UpdateBreadcrumb();
 
@@ -620,7 +619,7 @@ public partial class WorkDirectory : Window
     {
         BreadcrumbBar.Visibility = _pageStack.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         BreadcrumbText.Text = string.Join(" › ", _pageStack.Select(entry => entry.ParentItems[entry.SourceNoteIndex].Text));
-        Title = $"DBG depth={_pageStack.Count} children={paintSurface.Children.Count} crumb=[{BreadcrumbText.Text}]";
+        Title = _pageStack.Count > 0 ? $"Zametkis — {BreadcrumbText.Text}" : "Zametkis";
     }
 
     // лёгкая сериализация ТОЛЬКО активной (смонтированной на paintSurface) страницы, без файлового

@@ -18,9 +18,13 @@ public class RichTextNote : Border
 {
     private const double MinNoteWidth = 240;
     private const double MinNoteHeight = 160;
+    private const double HandleSize = 8.0;
 
     private readonly WebView2 _webView;
+    private readonly Canvas _handleCanvas;
     private bool _isReady;
+
+    private enum ResizeDir { TL, T, TR, L, R, BL, B, BR }
 
     public RichTextNote()
     {
@@ -31,38 +35,109 @@ public class RichTextNote : Border
 
         _webView = new WebView2();
 
-        var resizeThumb = new Thumb
+        var contentBorder = new Border
         {
-            Width = 16,
-            Height = 16,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            VerticalAlignment = VerticalAlignment.Bottom,
-            Cursor = Cursors.SizeNWSE,
-            Background = Brushes.Transparent
+            BorderBrush = (Brush)Application.Current.FindResource("AccentBrush"),
+            BorderThickness = new Thickness(1.5),
+            Background = Brushes.White,
+            Child = _webView
         };
-        resizeThumb.DragDelta += OnResizeDragDelta;
 
-        var grip = new System.Windows.Shapes.Path
+        _handleCanvas = new Canvas();
+
+        var handleTemplate = BuildHandleTemplate();
+
+        foreach (ResizeDir dir in Enum.GetValues<ResizeDir>())
         {
-            Data = Geometry.Parse("M 2,14 L 14,2 M 7,14 L 14,7 M 12,14 L 14,12"),
-            Stroke = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80)),
-            StrokeThickness = 2,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            IsHitTestVisible = false
-        };
+            var thumb = new Thumb
+            {
+                Width = HandleSize,
+                Height = HandleSize,
+                Cursor = CursorForDir(dir),
+                Template = handleTemplate,
+                Tag = dir
+            };
+            thumb.DragDelta += (_, e) => OnDrag(dir, e);
+            _handleCanvas.Children.Add(thumb);
+        }
 
         var grid = new Grid();
-        grid.Children.Add(_webView);
-        grid.Children.Add(grip);
-        grid.Children.Add(resizeThumb);
+        grid.Children.Add(contentBorder);
+        grid.Children.Add(_handleCanvas);
         Child = grid;
+
+        SizeChanged += (_, _) => PositionHandles();
+        Loaded += (_, _) => PositionHandles();
     }
 
-    private void OnResizeDragDelta(object sender, DragDeltaEventArgs e)
+    private static ControlTemplate BuildHandleTemplate()
     {
-        Width = Math.Max(MinNoteWidth, Width + e.HorizontalChange);
-        Height = Math.Max(MinNoteHeight, Height + e.VerticalChange);
+        var template = new ControlTemplate(typeof(Thumb));
+        var factory = new FrameworkElementFactory(typeof(Border));
+        factory.SetValue(Border.BackgroundProperty, Brushes.White);
+        factory.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x6C, 0x63, 0xFF)));
+        factory.SetValue(Border.BorderThicknessProperty, new Thickness(1.5));
+        template.VisualTree = factory;
+        return template;
+    }
+
+    private void PositionHandles()
+    {
+        double w = ActualWidth;
+        double h = ActualHeight;
+        double hs = HandleSize;
+
+        foreach (Thumb thumb in _handleCanvas.Children)
+        {
+            var dir = (ResizeDir)thumb.Tag;
+
+            double left = dir is ResizeDir.TL or ResizeDir.L or ResizeDir.BL ? -hs / 2
+                        : dir is ResizeDir.TR or ResizeDir.R or ResizeDir.BR ? w - hs / 2
+                        : w / 2 - hs / 2;
+
+            double top  = dir is ResizeDir.TL or ResizeDir.T or ResizeDir.TR ? -hs / 2
+                        : dir is ResizeDir.BL or ResizeDir.B or ResizeDir.BR ? h - hs / 2
+                        : h / 2 - hs / 2;
+
+            Canvas.SetLeft(thumb, left);
+            Canvas.SetTop(thumb, top);
+        }
+    }
+
+    private static Cursor CursorForDir(ResizeDir dir) => dir switch
+    {
+        ResizeDir.TL or ResizeDir.BR => Cursors.SizeNWSE,
+        ResizeDir.TR or ResizeDir.BL => Cursors.SizeNESW,
+        ResizeDir.T  or ResizeDir.B  => Cursors.SizeNS,
+        _                            => Cursors.SizeWE
+    };
+
+    private void OnDrag(ResizeDir dir, DragDeltaEventArgs e)
+    {
+        double dx = e.HorizontalChange;
+        double dy = e.VerticalChange;
+
+        if (dir is ResizeDir.TR or ResizeDir.R or ResizeDir.BR)
+            Width = Math.Max(MinNoteWidth, Width + dx);
+
+        if (dir is ResizeDir.TL or ResizeDir.L or ResizeDir.BL)
+        {
+            double newWidth = Math.Max(MinNoteWidth, Width - dx);
+            double left = Canvas.GetLeft(this);
+            Canvas.SetLeft(this, (double.IsNaN(left) ? 0 : left) + Width - newWidth);
+            Width = newWidth;
+        }
+
+        if (dir is ResizeDir.BL or ResizeDir.B or ResizeDir.BR)
+            Height = Math.Max(MinNoteHeight, Height + dy);
+
+        if (dir is ResizeDir.TL or ResizeDir.T or ResizeDir.TR)
+        {
+            double newHeight = Math.Max(MinNoteHeight, Height - dy);
+            double top = Canvas.GetTop(this);
+            Canvas.SetTop(this, (double.IsNaN(top) ? 0 : top) + Height - newHeight);
+            Height = newHeight;
+        }
     }
 
     public async Task InitializeAsync(string initialHtml, bool focusAfterInit = false)
