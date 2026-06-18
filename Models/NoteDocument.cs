@@ -11,6 +11,8 @@ public class NoteItemData
     public string? FileName { get; set; }
     public bool CaptionExpanded { get; set; } = true;
     public List<Point>? Points { get; set; } // абсолютные координаты точек мазка, для типа "Stroke"
+    public string? Color { get; set; } // цвет мазка ("#FFRRGGBB"), для типа "Stroke"
+    public double Thickness { get; set; } = 1.5; // толщина мазка, для типа "Stroke"
 }
 
 public class NoteDocument

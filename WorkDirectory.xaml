@@ -17,28 +17,39 @@
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Background="{StaticResource SurfaceBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <StackPanel Orientation="Horizontal" Margin="16,12">
-                <Button x:Name="PaintToolButton" Content="Рисование"
-                        Click="AddPaint" ClickMode="Press"
-                        Style="{StaticResource ToolButtonStyle}"/>
-                <Button x:Name="TextToolButton" Content="Текст"
-                        Click="AddText" ClickMode="Press"
-                        Style="{StaticResource ToolButtonStyle}"/>
-                <Button x:Name="PhotoToolButton" Content="Фото"
-                        Click="AddPhoto" ClickMode="Press"
-                        Style="{StaticResource ToolButtonStyle}"/>
-                <Border Width="1" Margin="4,4" Background="{StaticResource BorderBrush}"/>
-                <Button x:Name="SaveButton" Content="Сохранить"
-                        Click="SaveZametki" ClickMode="Press"
-                        Style="{StaticResource ToolButtonStyle}"/>
+            <StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="16,12,16,12">
+                    <Button x:Name="PaintToolButton" Content="Рисование"
+                            Click="AddPaint" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
+                    <Button x:Name="TextToolButton" Content="Текст"
+                            Click="AddText" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
+                    <Button x:Name="PhotoToolButton" Content="Фото"
+                            Click="AddPhoto" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
+                    <Border Width="1" Margin="4,4" Background="{StaticResource BorderBrush}"/>
+                    <Button x:Name="SaveButton" Content="Сохранить"
+                            Click="SaveZametki" ClickMode="Press"
+                            Style="{StaticResource ToolButtonStyle}"/>
+                </StackPanel>
+                <StackPanel x:Name="PaintOptionsPanel" Orientation="Horizontal"
+                            Margin="16,0,16,12" Visibility="Collapsed">
+                    <TextBlock Text="Толщина" VerticalAlignment="Center" Margin="0,0,8,0"
+                               FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <StackPanel x:Name="ThicknessPanel" Orientation="Horizontal" Margin="0,0,20,0"/>
+                    <TextBlock Text="Цвет" VerticalAlignment="Center" Margin="0,0,8,0"
+                               FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <StackPanel x:Name="ColorSwatchesPanel" Orientation="Horizontal"/>
+                </StackPanel>
             </StackPanel>
         </Border>
-        <Grid Grid.Row="1" ClipToBounds="True">
+        <Grid Name="canvasViewport" Grid.Row="1" ClipToBounds="True"
+              MouseMove="DrawME" MouseDown="PaintME"
+              MouseLeftButtonDown="WorkWithTool" MouseWheel="ZoomInAndOut"
+              MouseUp="StopMoving">
             <controls:DotGridBackground x:Name="dotGridBackground"/>
-            <Canvas Name="paintSurface" Background="Transparent"
-                    MouseMove="DrawME" MouseDown="PaintME"
-                    MouseLeftButtonDown="WorkWithTool" MouseWheel="ZoomInAndOut"
-                    MouseUp="StopMoving">
+            <Canvas Name="paintSurface" Background="Transparent">
             </Canvas>
         </Grid>
     </Grid>

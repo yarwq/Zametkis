@@ -1,5 +1,9 @@
 using System.Text.Json;
+using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Input;
+using System.Windows.Media;
 using Microsoft.Web.WebView2.Wpf;
 
 namespace Zametkis.Controls;
@@ -12,6 +16,9 @@ namespace Zametkis.Controls;
 // WebView2Base.CoreWebView2Controller_AcceleratorKeyPressed -> OnPreviewKeyDown -> KeyDown
 public class RichTextNote : Border
 {
+    private const double MinNoteWidth = 240;
+    private const double MinNoteHeight = 160;
+
     private readonly WebView2 _webView;
     private bool _isReady;
 
@@ -19,9 +26,43 @@ public class RichTextNote : Border
     {
         Width = 380;
         Height = 260;
+        MinWidth = MinNoteWidth;
+        MinHeight = MinNoteHeight;
 
         _webView = new WebView2();
-        Child = _webView;
+
+        var resizeThumb = new Thumb
+        {
+            Width = 16,
+            Height = 16,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Cursor = Cursors.SizeNWSE,
+            Background = Brushes.Transparent
+        };
+        resizeThumb.DragDelta += OnResizeDragDelta;
+
+        var grip = new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M 2,14 L 14,2 M 7,14 L 14,7 M 12,14 L 14,12"),
+            Stroke = new SolidColorBrush(Color.FromRgb(0x6B, 0x72, 0x80)),
+            StrokeThickness = 2,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            IsHitTestVisible = false
+        };
+
+        var grid = new Grid();
+        grid.Children.Add(_webView);
+        grid.Children.Add(grip);
+        grid.Children.Add(resizeThumb);
+        Child = grid;
+    }
+
+    private void OnResizeDragDelta(object sender, DragDeltaEventArgs e)
+    {
+        Width = Math.Max(MinNoteWidth, Width + e.HorizontalChange);
+        Height = Math.Max(MinNoteHeight, Height + e.VerticalChange);
     }
 
     public async Task InitializeAsync(string initialHtml, bool focusAfterInit = false)
@@ -75,13 +116,20 @@ public class RichTextNote : Border
     <meta name="color-scheme" content="light only">
     <style>
       html, body { margin:0; padding:0; font-family: "Segoe UI", sans-serif; font-size: 13px; color:#1F2333; background:#FFFFFF; height:100%; }
-      #toolbar { display:flex; gap:2px; padding:4px; background:#F1F1F7; border-bottom:1px solid #E4E4EC; color:#1F2333; }
+      body { display:flex; flex-direction:column; }
+      #toolbar { flex:0 0 auto; display:flex; gap:2px; padding:4px; background:#F1F1F7; border-bottom:1px solid #E4E4EC; color:#1F2333; }
       #toolbar button { border:none; background:transparent; color:#1F2333; padding:4px 8px; border-radius:6px; cursor:pointer; font-size:12px; }
       #toolbar button:hover { background:#E6E6F2; }
-      #editor { padding:8px; min-height:60px; outline:none; overflow:auto; background:#FFFFFF; color:#1F2333; }
+      #editor { flex:1 1 auto; padding:8px; outline:none; overflow:auto; background:#FFFFFF; color:#1F2333; }
       #editor table { border-collapse: collapse; width:100%; margin:4px 0; }
       #editor td, #editor th { border:1px solid #C7C7D6; padding:4px 6px; min-width:24px; }
-      #source { width:100%; box-sizing:border-box; min-height:60px; display:none; font-family: Consolas, monospace; font-size:12px; border:none; padding:8px; resize:none; outline:none; background:#FFFFFF; color:#1F2333; }
+      #source { flex:1 1 auto; width:100%; box-sizing:border-box; display:none; font-family: Consolas, monospace; font-size:12px; border:none; padding:8px; resize:none; outline:none; background:#FFFFFF; color:#1F2333; }
+      #hints { flex:0 0 auto; display:none; background:#F7F7FB; border-top:1px solid #E4E4EC; padding:8px 10px; max-height:150px; overflow:auto; }
+      #hints .hints-title { font-weight:600; margin-bottom:6px; }
+      #hints .hint-row { margin-bottom:6px; line-height:1.5; }
+      #hints code { background:#EFEFF5; padding:1px 4px; border-radius:4px; font-family:Consolas, monospace; }
+      #hints button.hint-insert { border:none; background:#6C63FF; color:#FFFFFF; padding:2px 8px; border-radius:6px; font-size:11px; cursor:pointer; margin-left:6px; }
+      #hints button.hint-insert:hover { background:#5A52E0; }
     </style>
     </head>
     <body>
@@ -96,11 +144,43 @@ public class RichTextNote : Border
       </div>
       <div id="editor" contenteditable="true"></div>
       <textarea id="source" spellcheck="false"></textarea>
+      <div id="hints">
+        <div class="hints-title">Подсказка: как менять вид через код</div>
+        <div class="hint-row">
+          Цвет фона ячейки таблицы: добавьте в тег <code>style="background:#FFF3CD;"</code>
+          <button class="hint-insert" onclick="insertExample('cell')">Вставить пример</button>
+        </div>
+        <div class="hint-row">
+          Цвет и размер текста: оберните текст в <code>&lt;span style="color:#1976D2; font-size:20px;"&gt;...&lt;/span&gt;</code>
+          <button class="hint-insert" onclick="insertExample('text')">Вставить пример</button>
+        </div>
+        <div class="hint-row">
+          Объединить две ячейки в строке: добавьте в первую <code>colspan="2"</code>, а вторую удалите
+        </div>
+      </div>
     <script>
       var editor = document.getElementById('editor');
       var source = document.getElementById('source');
       var srcBtn = document.getElementById('srcBtn');
+      var hints = document.getElementById('hints');
       var sourceMode = false;
+
+      function insertExample(kind) {
+        var snippets = {
+          cell: '<table><tr><td style="background:#FFF3CD;">Цветная ячейка</td><td>Обычная ячейка</td></tr></table><br>',
+          text: '<span style="color:#1976D2; font-size:20px;">Крупный синий текст</span><br>'
+        };
+        var snippet = snippets[kind];
+        if (!snippet) return;
+        if (sourceMode) {
+          var pos = source.selectionStart >= 0 ? source.selectionStart : source.value.length;
+          source.value = source.value.slice(0, pos) + snippet + source.value.slice(pos);
+          source.focus();
+        } else {
+          editor.focus();
+          document.execCommand('insertHTML', false, snippet);
+        }
+      }
 
       function cmd(name) { editor.focus(); document.execCommand(name, false, null); }
 
@@ -117,10 +197,12 @@ public class RichTextNote : Border
           source.value = formatHtml(editor.innerHTML);
           editor.style.display = 'none';
           source.style.display = 'block';
+          hints.style.display = 'block';
           srcBtn.classList.add('active');
         } else {
           editor.innerHTML = source.value;
           source.style.display = 'none';
+          hints.style.display = 'none';
           editor.style.display = 'block';
           srcBtn.classList.remove('active');
         }

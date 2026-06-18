@@ -8,7 +8,6 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using Microsoft.Win32;
 using Zametkis.Controls;
@@ -23,7 +22,9 @@ public partial class WorkDirectory : Window
     private double CameraY;
     private double CameraZoom = 1.0;
     //
-    private Point currentPoint = new Point();
+    private Point _panStartScreenPoint;
+    private double _panStartCameraX;
+    private double _panStartCameraY;
     private ScaleTransform scaleTransform;
     private ToolsZametki _currentTool;
     private Window workWindow;
@@ -32,10 +33,35 @@ public partial class WorkDirectory : Window
     private ShapePath? _currentStrokeShape;
     private readonly List<UIElement> _undoStack = new();
     private readonly List<UIElement> _redoStack = new();
+
+    private static readonly (string Label, double Thickness)[] ThicknessOptions =
+    {
+        ("Тонкая", 1.5),
+        ("Средняя", 3.5),
+        ("Толстая", 7.0)
+    };
+
+    private static readonly Color[] PaintColors =
+    {
+        Colors.Black,
+        Color.FromRgb(0xE5, 0x39, 0x35),
+        Color.FromRgb(0xFB, 0x8C, 0x00),
+        Color.FromRgb(0x43, 0xA0, 0x47),
+        Color.FromRgb(0x19, 0x76, 0xD2),
+        Color.FromRgb(0x8E, 0x24, 0xAA),
+        Color.FromRgb(0x6D, 0x4C, 0x41),
+    };
+
+    private double _currentStrokeThickness = ThicknessOptions[0].Thickness;
+    private Color _currentStrokeColor = Colors.Black;
+    private Button? _selectedThicknessButton;
+    private Border? _selectedColorSwatch;
+
     public WorkDirectory()
     {
         _currentTool = ToolsZametki.None;
         InitializeComponent();
+        BuildPaintOptionsUI();
 
         // зум и панорамирование - через RenderTransform, а не LayoutTransform:
         // LayoutTransform участвует в раскладке и сжимает локальный размер канваса при масштабировании,
@@ -160,11 +186,80 @@ public partial class WorkDirectory : Window
         SetToolButtonActive(PaintToolButton, _currentTool == ToolsZametki.Paint);
         SetToolButtonActive(TextToolButton, _currentTool == ToolsZametki.Text);
         SetToolButtonActive(PhotoToolButton, _currentTool == ToolsZametki.Photo);
+        PaintOptionsPanel.Visibility = _currentTool == ToolsZametki.Paint ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SetToolButtonActive(Button button, bool active)
     {
         button.Style = (Style)FindResource(active ? "ToolButtonActiveStyle" : "ToolButtonStyle");
+    }
+
+    // строим панель толщины/цвета пера программно, чтобы не плодить почти одинаковые блоки в XAML
+    private void BuildPaintOptionsUI()
+    {
+        foreach (var (label, thickness) in ThicknessOptions)
+        {
+            var dot = new Ellipse
+            {
+                Width = Math.Clamp(thickness * 2.2, 6, 18),
+                Height = Math.Clamp(thickness * 2.2, 6, 18),
+                Fill = Brushes.Black
+            };
+            var button = new Button
+            {
+                Content = dot,
+                Width = 36,
+                Height = 32,
+                Margin = new Thickness(0, 0, 4, 0),
+                ToolTip = label,
+                Style = (Style)FindResource("ToolButtonStyle")
+            };
+            button.Click += (_, _) => SetStrokeThickness(thickness, button);
+            ThicknessPanel.Children.Add(button);
+            if (Math.Abs(thickness - _currentStrokeThickness) < 0.01)
+                _selectedThicknessButton = button;
+        }
+        if (_selectedThicknessButton != null)
+            _selectedThicknessButton.Style = (Style)FindResource("ToolButtonActiveStyle");
+
+        foreach (var color in PaintColors)
+        {
+            var swatch = new Border
+            {
+                Width = 24,
+                Height = 24,
+                CornerRadius = new CornerRadius(12),
+                Background = new SolidColorBrush(color),
+                Margin = new Thickness(0, 0, 6, 0),
+                BorderThickness = new Thickness(2),
+                BorderBrush = Brushes.Transparent,
+                Cursor = Cursors.Hand
+            };
+            swatch.MouseLeftButtonUp += (_, _) => SetStrokeColor(color, swatch);
+            ColorSwatchesPanel.Children.Add(swatch);
+            if (color == _currentStrokeColor)
+                _selectedColorSwatch = swatch;
+        }
+        if (_selectedColorSwatch != null)
+            _selectedColorSwatch.BorderBrush = (Brush)FindResource("AccentBrush");
+    }
+
+    private void SetStrokeThickness(double thickness, Button button)
+    {
+        _currentStrokeThickness = thickness;
+        if (_selectedThicknessButton != null)
+            _selectedThicknessButton.Style = (Style)FindResource("ToolButtonStyle");
+        button.Style = (Style)FindResource("ToolButtonActiveStyle");
+        _selectedThicknessButton = button;
+    }
+
+    private void SetStrokeColor(Color color, Border swatch)
+    {
+        _currentStrokeColor = color;
+        if (_selectedColorSwatch != null)
+            _selectedColorSwatch.BorderBrush = Brushes.Transparent;
+        swatch.BorderBrush = (Brush)FindResource("AccentBrush");
+        _selectedColorSwatch = swatch;
     }
 
     private async void WorkWithTool(object sender, MouseButtonEventArgs e)
@@ -197,7 +292,7 @@ public partial class WorkDirectory : Window
             case ToolsZametki.Photo:
                 var dialog = new OpenFileDialog
                 {
-                    Filter = "Изображения|*.png;*.jpg;*.jpeg;*.gif;*.bmp"
+                    Filter = "Изображения и GIF|*.png;*.jpg;*.jpeg;*.gif;*.bmp"
                 };
                 if (dialog.ShowDialog() == true)
                 {
@@ -223,30 +318,20 @@ public partial class WorkDirectory : Window
         return note;
     }
 
-    private static BitmapImage LoadBitmap(string filePath)
-    {
-        var bitmap = new BitmapImage();
-        bitmap.BeginInit();
-        bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        bitmap.UriSource = new Uri(filePath);
-        bitmap.EndInit();
-        return bitmap;
-    }
-
     private static PhotoNote CreatePhotoNote(double x, double y, string filePath, string caption, bool expanded)
     {
-        var photoNote = new PhotoNote(LoadBitmap(filePath), filePath, caption, expanded);
+        var photoNote = new PhotoNote(filePath, caption, expanded);
         Canvas.SetLeft(photoNote, x);
         Canvas.SetTop(photoNote, y);
         return photoNote;
     }
 
-    private static ShapePath CreateStrokePath(List<Point> points)
+    private static ShapePath CreateStrokePath(List<Point> points, Color color, double thickness)
     {
         return new ShapePath
         {
-            Stroke = SystemColors.WindowFrameBrush,
-            StrokeThickness = 1.5,
+            Stroke = new SolidColorBrush(color),
+            StrokeThickness = thickness,
             StrokeLineJoin = PenLineJoin.Round,
             StrokeStartLineCap = PenLineCap.Round,
             StrokeEndLineCap = PenLineCap.Round,
@@ -337,16 +422,33 @@ public partial class WorkDirectory : Window
                 if (e.ButtonState == MouseButtonState.Pressed)
                 {
                     _currentStrokePoints = new List<Point> { Mouse.GetPosition(paintSurface) };
-                    _currentStrokeShape = CreateStrokePath(_currentStrokePoints);
+                    _currentStrokeShape = CreateStrokePath(_currentStrokePoints, _currentStrokeColor, _currentStrokeThickness);
                     paintSurface.Children.Add(_currentStrokeShape);
                     RegisterAddedItem(_currentStrokeShape);
                 }
                 break;
             case ToolsZametki.None:
-                if (e.ButtonState == MouseButtonState.Pressed)
+                // панорамирование начинаем только если кликнули по пустому канвасу (его фону
+                // или фону точечной сетки за ним), а не по дочернему элементу (фото, подпись,
+                // заметка) - иначе клик по плашке подписи тоже захватывает мышь и "улетает" камера.
+                // Захват вешаем на canvasViewport (не на сам paintSurface) - у paintSurface
+                // собственная "пустая" область при панорамировании уезжает вместе с трансформом
+                // и со временем перестаёт покрывать видимый вьюпорт
+                if (e.ButtonState == MouseButtonState.Pressed &&
+                    (e.OriginalSource == paintSurface || e.OriginalSource == dotGridBackground))
                 {
-                    paintSurface.CaptureMouse();
-                    currentPoint = Mouse.GetPosition(Grid1);
+                    // запоминаем точку старта и камеру на момент старта - дальше каждый раз считаем
+                    // полное смещение от этой точки, а не складываем дельты по кусочкам.
+                    // canvasViewport - стабильная (без трансформа) система координат самого вьюпорта,
+                    // в отличие от Grid1, который включает ещё и тулбар сверху.
+                    // Важно выставить эти поля ДО CaptureMouse(): захват мыши синхронно
+                    // переигрывает MouseMove (WPF пересчитывает hit-test под капотом), и если
+                    // он долетит до DrawME раньше, чем тут проставлены стартовые значения,
+                    // камера телепортируется в точку клика (старт считается от нулей)
+                    _panStartScreenPoint = Mouse.GetPosition(canvasViewport);
+                    _panStartCameraX = CameraX;
+                    _panStartCameraY = CameraY;
+                    canvasViewport.CaptureMouse();
                 }
                 break;
         }
@@ -372,17 +474,15 @@ public partial class WorkDirectory : Window
             case ToolsZametki.None:
                 if (e.LeftButton == MouseButtonState.Pressed)
                 {
-                    if (paintSurface.IsMouseCaptured)
+                    if (canvasViewport.IsMouseCaptured)
                     {
-                        var p = e.GetPosition(Grid1);
-                        var diff = p - currentPoint;
-                        currentPoint = p;
+                        var p = e.GetPosition(canvasViewport);
+                        var totalDiff = p - _panStartScreenPoint;
 
-                        CameraX -= diff.X / CameraZoom;
-                        CameraY -= diff.Y / CameraZoom;
+                        CameraX = _panStartCameraX - totalDiff.X / CameraZoom;
+                        CameraY = _panStartCameraY - totalDiff.Y / CameraZoom;
                         UpdateCamera();
                     }
-                    //TranslateTransform translateTransform1 = new TranslateTransform ( 50 , 20 );
                 }
                 break;
         }
@@ -390,9 +490,9 @@ public partial class WorkDirectory : Window
 
     private void StopMoving(object sender, MouseButtonEventArgs e)
     {
-        if (paintSurface.IsMouseCaptured)
+        if (canvasViewport.IsMouseCaptured)
         {
-            paintSurface.ReleaseMouseCapture();
+            canvasViewport.ReleaseMouseCapture();
         }
 
         _currentStrokePoints = null;
@@ -450,7 +550,9 @@ public partial class WorkDirectory : Window
                     document.Items.Add(new NoteItemData
                     {
                         Type = "Stroke",
-                        Points = strokePoints
+                        Points = strokePoints,
+                        Color = (strokePath.Stroke as SolidColorBrush)?.Color.ToString(),
+                        Thickness = strokePath.StrokeThickness
                     });
                     break;
             }
@@ -502,7 +604,16 @@ public partial class WorkDirectory : Window
                     break;
                 case "Stroke":
                     if (item.Points != null && item.Points.Count > 0)
-                        paintSurface.Children.Add(CreateStrokePath(item.Points));
+                    {
+                        Color strokeColor = Colors.Black;
+                        if (!string.IsNullOrEmpty(item.Color))
+                        {
+                            try { strokeColor = (Color)ColorConverter.ConvertFromString(item.Color); }
+                            catch { /* старый файл без цвета или повреждённое значение - используем чёрный */ }
+                        }
+                        double thickness = item.Thickness > 0 ? item.Thickness : 1.5;
+                        paintSurface.Children.Add(CreateStrokePath(item.Points, strokeColor, thickness));
+                    }
                     break;
             }
         }
